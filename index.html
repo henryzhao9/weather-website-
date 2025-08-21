@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>天气预报</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>天气预报</h1>
+            <div class="search-box">
+                <input type="text" id="cityInput" placeholder="输入城市名称" value="北京">
+                <button onclick="searchWeather()">搜索</button>
+            </div>
+        </header>
+        
+        <main>
+            <div class="current-weather">
+                <h2 id="currentCity">北京</h2>
+                <div class="weather-info">
+                    <div class="temperature">
+                        <span id="currentTemp">--</span>°C
+                    </div>
+                    <div class="weather-desc" id="currentDesc">--</div>
+                </div>
+            </div>
+            
+            <div class="forecast-container">
+                <h3>未来3天预报</h3>
+                <div class="forecast-list" id="forecastList">
+                    <!-- 天气数据将在这里动态显示 -->
+                </div>
+            </div>
+        </main>
+    </div>
+    
+    <script src="script.js"></script>
+</body>
+</html> 
