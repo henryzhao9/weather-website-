@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>天气预报</title>
     <link rel="stylesheet" href="style.css">
+    <!-- 引入 Leaflet 地图（无需Key） -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
 <body>
     <div class="container">
@@ -13,17 +16,51 @@
             <div class="search-box">
                 <input type="text" id="cityInput" placeholder="输入城市名称" value="北京">
                 <button onclick="searchWeather()">搜索</button>
+                <button onclick="getCurrentLocation()" class="location-btn">📍 自动定位</button>
+            </div>
+            <div class="location-status" id="locationStatus">
+                <span>正在获取您的位置...</span>
             </div>
         </header>
         
         <main>
-            <div class="current-weather">
-                <h2 id="currentCity">北京</h2>
-                <div class="weather-info">
-                    <div class="temperature">
-                        <span id="currentTemp">--</span>°C
+            <div class="weather-grid">
+                <!-- 左侧：当前天气 -->
+                <div class="current-weather">
+                    <h2 id="currentCity">北京</h2>
+                    <div class="weather-info">
+                        <div class="temperature">
+                            <span id="currentTemp">--</span>°C
+                        </div>
+                        <div class="weather-desc" id="currentDesc">--</div>
                     </div>
-                    <div class="weather-desc" id="currentDesc">--</div>
+                    <div class="detailed-info">
+                        <div class="info-item">
+                            <span class="label">湿度:</span>
+                            <span id="humidity">--%</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">风速:</span>
+                            <span id="windSpeed">-- km/h</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">气压:</span>
+                            <span id="pressure">-- hPa</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">能见度:</span>
+                            <span id="visibility">-- km</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 右侧：地图 -->
+                <div class="map-container">
+                    <h3>位置地图</h3>
+                    <div id="map"></div>
+                    <div class="map-info">
+                        <span id="mapLocation">正在获取位置...</span>
+                    </div>
                 </div>
             </div>
             
@@ -31,6 +68,14 @@
                 <h3>未来3天预报</h3>
                 <div class="forecast-list" id="forecastList">
                     <!-- 天气数据将在这里动态显示 -->
+                </div>
+            </div>
+            
+            <!-- 新增：小时预报 -->
+            <div class="hourly-container">
+                <h3>24小时预报</h3>
+                <div class="hourly-list" id="hourlyList">
+                    <!-- 小时预报将在这里显示 -->
                 </div>
             </div>
         </main>
