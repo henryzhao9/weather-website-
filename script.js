@@ -1,12 +1,12 @@
-// 和风天气API（按经纬度请求）
+// 和风天气API（按城市名称请求）
 const QWEATHER_BASE = 'https://devapi.qweather.com/v7';
 const QWEATHER_KEY = '0f493d0ad80ae004670d82205c1ec6b5';
 
-// 简单内存缓存（带TTL）按坐标键
+// 简单内存缓存（带TTL）按城市名键
 const cache = {
-  now: new Map(),         // 'lat,lng' -> { value, time }
-  forecast: new Map(),    // 'lat,lng' -> { value, time }
-  hourly: new Map(),      // 'lat,lng' -> { value, time }
+  now: new Map(),         // city -> { value, time }
+  forecast: new Map(),    // city -> { value, time }
+  hourly: new Map(),      // city -> { value, time }
   geocode: new Map()      // city -> { value, time }
 };
 function getFromCache(map, key, ttlMs) {
@@ -48,7 +48,6 @@ function initMap() {
     const lng = e.latlng.lng;
     updateMarker(lat, lng);
     reverseGeocode(lat, lng);
-    updateWeatherByCurrentPosition();
   });
 }
 
@@ -69,6 +68,8 @@ async function reverseGeocode(lat, lng) {
     currentCityName = city;
     document.getElementById('mapLocation').textContent = data.display_name || `${lat}, ${lng}`;
     document.getElementById('cityInput').value = city;
+    // 获取该城市的天气
+    getWeatherByCity(city);
   } catch (e) {
     document.getElementById('mapLocation').textContent = '无法解析当前位置';
   }
@@ -84,7 +85,7 @@ async function forwardGeocode(city) {
     updateMarker(latNum, lonNum);
     currentCityName = city;
     document.getElementById('mapLocation').textContent = display_name;
-    updateWeatherByCurrentPosition();
+    getWeatherByCity(city);
     return;
   }
   try {
@@ -99,7 +100,7 @@ async function forwardGeocode(city) {
       updateMarker(latNum, lonNum);
       currentCityName = city;
       document.getElementById('mapLocation').textContent = first.display_name;
-      updateWeatherByCurrentPosition();
+      getWeatherByCity(city);
     }
   } catch (e) { /* ignore */ }
 }
@@ -117,7 +118,6 @@ function getCurrentLocation() {
         updateMarker(lat, lng);
         reverseGeocode(lat, lng);
         document.getElementById('mapLocation').textContent = '定位成功！';
-        updateWeatherByCurrentPosition();
       },
       err => {
         let msg = '定位失败，请手动选择位置';
@@ -125,66 +125,71 @@ function getCurrentLocation() {
         else if (err.code === err.POSITION_UNAVAILABLE) msg = '位置信息不可用';
         else if (err.code === err.TIMEOUT) msg = '定位超时';
         document.getElementById('mapLocation').textContent = msg;
-        debouncedSearchWeather();
+        // 定位失败时获取默认城市天气
+        getWeatherByCity('北京');
       }, options
     );
   } else {
     document.getElementById('mapLocation').textContent = '浏览器不支持地理定位';
-    debouncedSearchWeather();
+    getWeatherByCity('北京');
   }
 }
 
-// 搜索天气（基于城市 -> 坐标 -> 天气）
+// 搜索天气（基于城市名称）
 function searchWeather() {
   const city = document.getElementById('cityInput').value.trim();
   if (!city) { showError('请输入城市名称'); return; }
   showLoading();
-  forwardGeocodeDebounced(city);
+  getWeatherByCity(city);
 }
 const debouncedSearchWeather = debounce(searchWeather, 600);
 
-// 基于当前坐标拉取天气（和风JSONP）
-function updateWeatherByCurrentPosition() {
-  const { lat, lng } = currentPosition;
-  const key = `${lat.toFixed(3)},${lng.toFixed(3)}`; // 约简精度提升缓存命中
-
-  const cachedNow = getFromCache(cache.now, key, 10 * 60 * 1000);
-  const cachedDaily = getFromCache(cache.forecast, key, 30 * 60 * 1000);
-  const cachedHourly = getFromCache(cache.hourly, key, 30 * 60 * 1000);
+// 基于城市名称获取天气（和风JSONP）
+function getWeatherByCity(city) {
+  console.log('正在获取城市天气:', city);
+  
+  // 先查缓存
+  const cachedNow = getFromCache(cache.now, city, 10 * 60 * 1000);
+  const cachedDaily = getFromCache(cache.forecast, city, 30 * 60 * 1000);
+  const cachedHourly = getFromCache(cache.hourly, city, 30 * 60 * 1000);
+  
   if (cachedNow && cachedDaily && cachedHourly) {
-    displayCurrentWeather(cachedNow, currentCityName);
+    console.log('使用缓存数据');
+    displayCurrentWeather(cachedNow, city);
     displayForecast(cachedDaily);
     displayHourlyForecast(cachedHourly);
     return;
   }
 
-  const coord = `${lng},${lat}`; // 和风要求：经度在前，纬度在后
-
   // 获取实时天气
-  getCurrentWeatherByJSONP(coord, key);
+  getCurrentWeatherByJSONP(city);
   // 获取3天预报
-  getForecastByJSONP(coord, key);
+  getForecastByJSONP(city);
   // 获取24小时预报
-  getHourlyForecastByJSONP(coord, key);
+  getHourlyForecastByJSONP(city);
 }
 
 // JSONP方式获取实时天气
-function getCurrentWeatherByJSONP(coord, key) {
+function getCurrentWeatherByJSONP(city) {
   const script = document.createElement('script');
   const callbackName = 'weatherCallback_' + Date.now();
   
   window[callbackName] = function(data) {
+    console.log('实时天气API返回:', data);
     if (data && data.code === '200') {
-      setCache(cache.now, key, data.now);
-      displayCurrentWeather(data.now, currentCityName);
+      setCache(cache.now, city, data.now);
+      displayCurrentWeather(data.now, city);
     } else {
       console.error('实时天气API错误:', data);
+      showError('获取实时天气失败: ' + (data?.msg || '未知错误'));
     }
     document.head.removeChild(script);
     delete window[callbackName];
   };
   
-  script.src = `${QWEATHER_BASE}/weather/now?location=${coord}&key=${QWEATHER_KEY}&callback=${callbackName}`;
+  const url = `${QWEATHER_BASE}/weather/now?location=${encodeURIComponent(city)}&key=${QWEATHER_KEY}&callback=${callbackName}`;
+  console.log('请求实时天气URL:', url);
+  script.src = url;
   document.head.appendChild(script);
   
   setTimeout(() => {
@@ -197,23 +202,26 @@ function getCurrentWeatherByJSONP(coord, key) {
 }
 
 // JSONP方式获取3天预报
-function getForecastByJSONP(coord, key) {
+function getForecastByJSONP(city) {
   const script = document.createElement('script');
   const callbackName = 'forecastCallback_' + Date.now();
   
   window[callbackName] = function(data) {
+    console.log('3天预报API返回:', data);
     if (data && data.code === '200') {
-      setCache(cache.forecast, key, data.daily);
+      setCache(cache.forecast, city, data.daily);
       displayForecast(data.daily);
     } else {
       console.error('3天预报API错误:', data);
-      showError('获取天气预报失败');
+      showError('获取天气预报失败: ' + (data?.msg || '未知错误'));
     }
     document.head.removeChild(script);
     delete window[callbackName];
   };
   
-  script.src = `${QWEATHER_BASE}/weather/3d?location=${coord}&key=${QWEATHER_KEY}&callback=${callbackName}`;
+  const url = `${QWEATHER_BASE}/weather/3d?location=${encodeURIComponent(city)}&key=${QWEATHER_KEY}&callback=${callbackName}`;
+  console.log('请求3天预报URL:', url);
+  script.src = url;
   document.head.appendChild(script);
   
   setTimeout(() => {
@@ -226,13 +234,14 @@ function getForecastByJSONP(coord, key) {
 }
 
 // JSONP方式获取24小时预报
-function getHourlyForecastByJSONP(coord, key) {
+function getHourlyForecastByJSONP(city) {
   const script = document.createElement('script');
   const callbackName = 'hourlyCallback_' + Date.now();
   
   window[callbackName] = function(data) {
+    console.log('24小时预报API返回:', data);
     if (data && data.code === '200') {
-      setCache(cache.hourly, key, data.hourly);
+      setCache(cache.hourly, city, data.hourly);
       displayHourlyForecast(data.hourly);
     } else {
       console.error('24小时预报API错误:', data);
@@ -241,7 +250,9 @@ function getHourlyForecastByJSONP(coord, key) {
     delete window[callbackName];
   };
   
-  script.src = `${QWEATHER_BASE}/weather/24h?location=${coord}&key=${QWEATHER_KEY}&callback=${callbackName}`;
+  const url = `${QWEATHER_BASE}/weather/24h?location=${encodeURIComponent(city)}&key=${QWEATHER_KEY}&callback=${callbackName}`;
+  console.log('请求24小时预报URL:', url);
+  script.src = url;
   document.head.appendChild(script);
   
   setTimeout(() => {
