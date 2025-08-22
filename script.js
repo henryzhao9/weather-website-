@@ -1,340 +1,198 @@
-// Open-Meteo 免费天气API（无需Key，支持CORS）
-const OPEN_METEO_BASE = 'https://api.open-meteo.com/v1/forecast';
-
-// 简单内存缓存（带TTL）按坐标键
-const cache = {
-  now: new Map(),         // 'lat,lng' -> { value, time }
-  forecast: new Map(),    // 'lat,lng' -> { value, time }
-  hourly: new Map(),      // 'lat,lng' -> { value, time }
-  geocode: new Map()      // city -> { value, time }
-};
-function getFromCache(map, key, ttlMs) {
-  const item = map.get(key);
-  if (item && Date.now() - item.time < ttlMs) return item.value;
-  return null;
-}
-function setCache(map, key, value) {
-  map.set(key, { value, time: Date.now() });
-}
-
-// 去抖工具
-function debounce(fn, delay = 600) {
-  let timer = null;
-  return function(...args) {
-    clearTimeout(timer);
-    timer = setTimeout(() => fn.apply(this, args), delay);
-  };
-}
-
-// 地图相关变量（Leaflet）
+// 天气预报应用
 let map;
 let marker;
-let currentPosition = { lat: 39.9042, lng: 116.4074 }; // 默认北京
-let currentCityName = '北京';
+let currentCity = '北京';
 
 // 页面加载时初始化
 document.addEventListener('DOMContentLoaded', function() {
-  initMap();
-  getCurrentLocation();
+    initMap();
+    getWeather('北京');
 });
 
-// 初始化Leaflet地图
+// 初始化地图
 function initMap() {
-  map = L.map('map').setView([currentPosition.lat, currentPosition.lng], 10);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
-  map.on('click', function(e) {
-    const lat = e.latlng.lat;
-    const lng = e.latlng.lng;
-    updateLocationAndWeather(lat, lng);
-  });
+    map = L.map('map').setView([39.9042, 116.4074], 10);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap'
+    }).addTo(map);
+    
+    // 点击地图事件
+    map.on('click', function(e) {
+        const lat = e.latlng.lat;
+        const lng = e.latlng.lng;
+        updateMarker(lat, lng);
+        getLocationName(lat, lng);
+    });
 }
 
+// 更新地图标记
 function updateMarker(lat, lng) {
-  if (marker) marker.remove();
-  marker = L.marker([lat, lng]).addTo(map);
-  currentPosition = { lat, lng };
+    if (marker) marker.remove();
+    marker = L.marker([lat, lng]).addTo(map);
 }
 
-// 更新位置和天气（同步操作）
-async function updateLocationAndWeather(lat, lng) {
-  // 先更新地图标记
-  updateMarker(lat, lng);
-  
-  // 显示加载状态
-  showLoading();
-  
-  try {
-    // 获取地址信息
-    const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`;
-    const res = await fetch(url, { headers: { 'Accept-Language': 'zh-CN' } });
-    const data = await res.json();
-    const addr = data.address || {};
-    const city = addr.city || addr.town || addr.village || addr.county || addr.state || '未知位置';
-    
-    // 更新界面显示
-    currentCityName = city;
-    document.getElementById('mapLocation').textContent = data.display_name || `${lat}, ${lng}`;
-    document.getElementById('cityInput').value = city;
-    
-    // 获取该位置的天气
-    await getWeatherByPosition(lat, lng, city);
-  } catch (e) {
-    document.getElementById('mapLocation').textContent = '无法解析当前位置';
-    // 即使地址解析失败，也要获取天气
-    await getWeatherByPosition(lat, lng, '未知位置');
-  }
-}
-
-// 正地理编码（城市名 -> 坐标）并同步更新
-async function forwardGeocode(city) {
-  const cached = getFromCache(cache.geocode, city, 12 * 60 * 60 * 1000);
-  if (cached) {
-    const { lat, lon, display_name } = cached;
-    const latNum = parseFloat(lat), lonNum = parseFloat(lon);
-    await updateLocationAndWeather(latNum, lonNum);
-    return;
-  }
-  
-  try {
-    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(city)}`;
-    const res = await fetch(url, { headers: { 'Accept-Language': 'zh-CN' } });
-    const data = await res.json();
-    if (Array.isArray(data) && data.length > 0) {
-      const first = data[0];
-      setCache(cache.geocode, city, first);
-      const latNum = parseFloat(first.lat), lonNum = parseFloat(first.lon);
-      await updateLocationAndWeather(latNum, lonNum);
+// 获取位置名称
+async function getLocationName(lat, lng) {
+    try {
+        const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
+        const data = await response.json();
+        const city = data.address?.city || data.address?.town || data.address?.state || '未知位置';
+        document.getElementById('mapInfo').textContent = data.display_name;
+        document.getElementById('cityInput').value = city;
+        getWeather(city);
+    } catch (error) {
+        console.error('获取位置名称失败:', error);
     }
-  } catch (e) { 
-    showError('无法找到该城市');
-  }
-}
-const forwardGeocodeDebounced = debounce(forwardGeocode, 800);
-
-// 自动定位
-function getCurrentLocation() {
-  document.getElementById('mapLocation').textContent = '正在获取位置...';
-  if (navigator.geolocation) {
-    const options = { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 };
-    navigator.geolocation.getCurrentPosition(
-      async pos => {
-        const lat = pos.coords.latitude, lng = pos.coords.longitude;
-        await updateLocationAndWeather(lat, lng);
-        document.getElementById('mapLocation').textContent = '定位成功！';
-      },
-      err => {
-        let msg = '定位失败，请手动选择位置';
-        if (err.code === err.PERMISSION_DENIED) msg = '位置权限被拒绝';
-        else if (err.code === err.POSITION_UNAVAILABLE) msg = '位置信息不可用';
-        else if (err.code === err.TIMEOUT) msg = '定位超时';
-        document.getElementById('mapLocation').textContent = msg;
-        // 定位失败时获取默认城市天气
-        updateLocationAndWeather(39.9042, 116.4074);
-      }, options
-    );
-  } else {
-    document.getElementById('mapLocation').textContent = '浏览器不支持地理定位';
-    updateLocationAndWeather(39.9042, 116.4074);
-  }
 }
 
-// 搜索天气（基于城市名称）
-function searchWeather() {
-  const city = document.getElementById('cityInput').value.trim();
-  if (!city) { showError('请输入城市名称'); return; }
-  showLoading();
-  forwardGeocodeDebounced(city);
-}
-const debouncedSearchWeather = debounce(searchWeather, 600);
-
-// 基于坐标获取天气（Open-Meteo）
-async function getWeatherByPosition(lat, lng, cityName) {
-  console.log('正在获取位置天气:', lat, lng, cityName);
-  
-  const key = `${lat.toFixed(3)},${lng.toFixed(3)}`;
-  
-  // 先查缓存
-  const cachedNow = getFromCache(cache.now, key, 10 * 60 * 1000);
-  const cachedDaily = getFromCache(cache.forecast, key, 30 * 60 * 1000);
-  const cachedHourly = getFromCache(cache.hourly, key, 30 * 60 * 1000);
-  
-  if (cachedNow && cachedDaily && cachedHourly) {
-    console.log('使用缓存数据');
-    displayCurrentWeather(cachedNow, cityName);
-    displayForecast(cachedDaily);
-    displayHourlyForecast(cachedHourly);
-    return;
-  }
-
-  try {
-    const params = new URLSearchParams({
-      latitude: lat,
-      longitude: lng,
-      current_weather: 'true',
-      hourly: 'temperature_2m,relativehumidity_2m,pressure_msl,windspeed_10m,visibility,weathercode',
-      daily: 'temperature_2m_max,temperature_2m_min,weathercode',
-      forecast_days: '3',
-      timezone: 'auto'
-    });
-    
-    const url = `${OPEN_METEO_BASE}?${params.toString()}`;
-    console.log('请求天气URL:', url);
-    
-    const response = await fetch(url);
-    const data = await response.json();
-    
-    console.log('天气API返回:', data);
-
-    // 适配到现有渲染结构
-    const now = adaptCurrent(data);
-    const dailyList = adaptDaily(data);
-    const hourlyList = adaptHourly(data);
-
-    setCache(cache.now, key, now);
-    setCache(cache.forecast, key, dailyList);
-    setCache(cache.hourly, key, hourlyList);
-
-    displayCurrentWeather(now, cityName);
-    displayForecast(dailyList);
-    displayHourlyForecast(hourlyList);
-  } catch (error) {
-    console.error('天气请求失败:', error);
-    showError('天气服务请求失败');
-  }
-}
-
-// 适配器：Open-Meteo -> 现有结构
-function weatherCodeToText(code) {
-  const m = {
-    0: '晴', 1: '多云', 2: '多云', 3: '阴',
-    45: '雾', 48: '雾', 51: '小毛毛雨', 53: '毛毛雨', 55: '大毛毛雨',
-    56: '冻毛毛雨', 57: '冻毛毛雨', 61: '小雨', 63: '中雨', 65: '大雨',
-    66: '冻雨', 67: '冻雨', 71: '小雪', 73: '中雪', 75: '大雪', 77: '雪粒',
-    80: '阵雨', 81: '强阵雨', 82: '暴阵雨', 85: '阵雪', 86: '强阵雪',
-    95: '雷阵雨', 96: '雷阵雨伴冰雹', 99: '强雷阵雨伴冰雹'
-  };
-  return m[code] || '未知';
-}
-
-function adaptCurrent(data) {
-  const cw = data.current_weather || {};
-  // 在 hourly 中找到与当前时间最接近的索引以取湿度/气压/能见度
-  let idx = 0;
-  if (data.hourly && Array.isArray(data.hourly.time)) {
-    const times = data.hourly.time.map(t => new Date(t).getTime());
-    const nowTs = new Date(cw.time || Date.now()).getTime();
-    let best = Infinity; idx = 0;
-    for (let i = 0; i < times.length; i++) {
-      const diff = Math.abs(times[i] - nowTs);
-      if (diff < best) { best = diff; idx = i; }
+// 搜索城市
+function searchCity() {
+    const city = document.getElementById('cityInput').value.trim();
+    if (city) {
+        getWeather(city);
+        // 尝试获取城市坐标并更新地图
+        getCityCoordinates(city);
     }
-  }
-  const h = data.hourly || {};
-  return {
-    temp: cw.temperature ? Math.round(cw.temperature) : '--',
-    text: weatherCodeToText(cw.weathercode),
-    humidity: (h.relativehumidity_2m && h.relativehumidity_2m[idx]) ?? '--',
-    pressure: (h.pressure_msl && h.pressure_msl[idx]) ?? '--',
-    windSpeed: cw.windspeed ?? (h.windspeed_10m && h.windspeed_10m[idx]) ?? '--',
-    vis: (h.visibility && Math.round((h.visibility[idx] || 0) / 1000)) ?? '--'
-  };
 }
 
-function adaptDaily(data) {
-  const daily = data.daily || {};
-  const out = [];
-  const len = (daily.time || []).length;
-  for (let i = 0; i < len; i++) {
-    out.push({
-      fxDate: daily.time[i],
-      tempMax: daily.temperature_2m_max ? Math.round(daily.temperature_2m_max[i]) : '--',
-      tempMin: daily.temperature_2m_min ? Math.round(daily.temperature_2m_min[i]) : '--',
-      textDay: weatherCodeToText(daily.weathercode ? daily.weathercode[i] : null)
+// 获取城市坐标
+async function getCityCoordinates(city) {
+    try {
+        const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(city)}`);
+        const data = await response.json();
+        if (data.length > 0) {
+            const lat = parseFloat(data[0].lat);
+            const lng = parseFloat(data[0].lon);
+            map.setView([lat, lng], 12);
+            updateMarker(lat, lng);
+            document.getElementById('mapInfo').textContent = data[0].display_name;
+        }
+    } catch (error) {
+        console.error('获取城市坐标失败:', error);
+    }
+}
+
+// 获取我的位置
+function getMyLocation() {
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+            function(position) {
+                const lat = position.coords.latitude;
+                const lng = position.coords.longitude;
+                map.setView([lat, lng], 12);
+                updateMarker(lat, lng);
+                getLocationName(lat, lng);
+            },
+            function(error) {
+                alert('无法获取位置，请手动搜索城市');
+            }
+        );
+    } else {
+        alert('浏览器不支持地理定位');
+    }
+}
+
+// 获取天气数据（使用wttr.in免费API）
+async function getWeather(city) {
+    showLoading();
+    currentCity = city;
+    
+    try {
+        // 获取当前天气
+        const weatherResponse = await fetch(`https://wttr.in/${encodeURIComponent(city)}?format=j1`);
+        const weatherData = await weatherResponse.json();
+        
+        if (weatherData && weatherData.current_condition && weatherData.current_condition[0]) {
+            displayCurrentWeather(weatherData.current_condition[0]);
+        }
+        
+        // 获取3天预报
+        if (weatherData && weatherData.weather) {
+            displayForecast(weatherData.weather.slice(0, 3));
+        }
+        
+        // 获取24小时预报
+        if (weatherData && weatherData.weather && weatherData.weather[0] && weatherData.weather[0].hourly) {
+            displayHourlyForecast(weatherData.weather[0].hourly);
+        }
+        
+    } catch (error) {
+        console.error('获取天气失败:', error);
+        showError('获取天气数据失败，请稍后重试');
+    }
+}
+
+// 显示当前天气
+function displayCurrentWeather(data) {
+    document.getElementById('currentCity').textContent = currentCity;
+    document.getElementById('currentTemp').textContent = `${data.temp_C}°C`;
+    document.getElementById('currentDesc').textContent = data.weatherDesc[0].value;
+    document.getElementById('humidity').textContent = `${data.humidity}%`;
+    document.getElementById('windSpeed').textContent = `${data.windspeedKmph} km/h`;
+    document.getElementById('pressure').textContent = `${data.pressure} hPa`;
+}
+
+// 显示3天预报
+function displayForecast(forecastData) {
+    const forecastGrid = document.getElementById('forecastGrid');
+    forecastGrid.innerHTML = '';
+    
+    forecastData.forEach(day => {
+        const date = new Date(day.date);
+        const dayName = getDayName(date.getDay());
+        
+        const forecastItem = document.createElement('div');
+        forecastItem.className = 'forecast-item';
+        forecastItem.innerHTML = `
+            <div class="forecast-date">${dayName}</div>
+            <div class="forecast-temp">${day.hourly[4].tempC}°C</div>
+            <div class="forecast-desc">${day.hourly[4].weatherDesc[0].value}</div>
+        `;
+        forecastGrid.appendChild(forecastItem);
     });
-  }
-  return out;
 }
 
-function adaptHourly(data) {
-  const h = data.hourly || {};
-  const out = [];
-  const len = (h.time || []).length;
-  for (let i = 0; i < Math.min(len, 24); i++) {
-    out.push({
-      fxTime: h.time[i],
-      temp: h.temperature_2m ? Math.round(h.temperature_2m[i]) : '--',
-      text: weatherCodeToText(h.weathercode ? h.weathercode[i] : null),
-      humidity: h.relativehumidity_2m ? h.relativehumidity_2m[i] : '--',
-      windSpeed: h.windspeed_10m ? h.windspeed_10m[i] : '--'
+// 显示24小时预报
+function displayHourlyForecast(hourlyData) {
+    const hourlyScroll = document.getElementById('hourlyScroll');
+    hourlyScroll.innerHTML = '';
+    
+    hourlyData.forEach(hour => {
+        const time = hour.time;
+        const timeStr = time.padStart(4, '0').substring(0, 2) + ':00';
+        
+        const hourlyItem = document.createElement('div');
+        hourlyItem.className = 'hourly-item';
+        hourlyItem.innerHTML = `
+            <div class="hourly-time">${timeStr}</div>
+            <div class="hourly-temp">${hour.tempC}°C</div>
+            <div class="hourly-desc">${hour.weatherDesc[0].value}</div>
+        `;
+        hourlyScroll.appendChild(hourlyItem);
     });
-  }
-  return out;
 }
 
-// 渲染
-function displayCurrentWeather(weather, city) {
-  document.getElementById('currentCity').textContent = city;
-  document.getElementById('currentTemp').textContent = weather.temp;
-  document.getElementById('currentDesc').textContent = weather.text;
-  document.getElementById('humidity').textContent = (weather.humidity ?? '--') + '%';
-  document.getElementById('windSpeed').textContent = (weather.windSpeed ?? '--') + ' km/h';
-  document.getElementById('pressure').textContent = (weather.pressure ?? '--') + ' hPa';
-  document.getElementById('visibility').textContent = (weather.vis ?? '--') + ' km';
-}
-
-function displayForecast(forecast) {
-  const forecastList = document.getElementById('forecastList');
-  forecastList.innerHTML = '';
-  forecast.forEach(day => {
-    const date = new Date(day.fxDate);
-    const dayName = getDayName(date.getDay());
-    const item = document.createElement('div');
-    item.className = 'forecast-item';
-    item.innerHTML = `
-      <div class="forecast-date">${dayName}<br>${day.fxDate}</div>
-      <div class="forecast-temp">${day.tempMax}°C / ${day.tempMin}°C</div>
-      <div class="forecast-desc">${day.textDay}</div>
-    `;
-    forecastList.appendChild(item);
-  });
-}
-
-function displayHourlyForecast(hourly) {
-  const hourlyList = document.getElementById('hourlyList');
-  hourlyList.innerHTML = '';
-  hourly.forEach(hour => {
-    const time = new Date(hour.fxTime);
-    const timeStr = time.getHours().toString().padStart(2, '0') + ':00';
-    const item = document.createElement('div');
-    item.className = 'hourly-item';
-    item.innerHTML = `
-      <div class="hourly-time">${timeStr}</div>
-      <div class="hourly-temp">${hour.temp}°C</div>
-      <div class="hourly-desc">${hour.text}</div>
-      <div class="hourly-details">
-        <div>湿度: ${hour.humidity ?? '--'}%</div>
-        <div>风速: ${hour.windSpeed ?? '--'} km/h</div>
-      </div>
-    `;
-    hourlyList.appendChild(item);
-  });
-}
-
+// 获取星期名称
 function getDayName(day) {
-  const days = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-  return days[day];
+    const days = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+    return days[day];
 }
 
+// 显示加载状态
 function showLoading() {
-  const forecastList = document.getElementById('forecastList');
-  forecastList.innerHTML = '<div class="loading">正在获取天气数据...</div>';
+    document.getElementById('forecastGrid').innerHTML = '<div class="loading">正在获取天气数据...</div>';
+    document.getElementById('hourlyScroll').innerHTML = '';
 }
 
+// 显示错误信息
 function showError(message) {
-  const forecastList = document.getElementById('forecastList');
-  forecastList.innerHTML = `<div class="error">${message}</div>`;
+    document.getElementById('forecastGrid').innerHTML = `<div class="error">${message}</div>`;
+    document.getElementById('hourlyScroll').innerHTML = '';
 }
 
+// 回车键搜索
 document.getElementById('cityInput').addEventListener('keypress', function(e) {
-  if (e.key === 'Enter') debouncedSearchWeather();
+    if (e.key === 'Enter') {
+        searchCity();
+    }
 }); 
