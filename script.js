@@ -143,8 +143,8 @@ function searchWeather() {
 }
 const debouncedSearchWeather = debounce(searchWeather, 600);
 
-// 基于当前坐标拉取天气（和风）
-async function updateWeatherByCurrentPosition() {
+// 基于当前坐标拉取天气（和风JSONP）
+function updateWeatherByCurrentPosition() {
   const { lat, lng } = currentPosition;
   const key = `${lat.toFixed(3)},${lng.toFixed(3)}`; // 约简精度提升缓存命中
 
@@ -158,38 +158,99 @@ async function updateWeatherByCurrentPosition() {
     return;
   }
 
-  try {
-    const coord = `${lng},${lat}`; // 和风要求：经度在前，纬度在后
+  const coord = `${lng},${lat}`; // 和风要求：经度在前，纬度在后
 
-    const [nowRes, dailyRes, hourlyRes] = await Promise.all([
-      fetch(`${QWEATHER_BASE}/weather/now?location=${coord}&key=${QWEATHER_KEY}`),
-      fetch(`${QWEATHER_BASE}/weather/3d?location=${coord}&key=${QWEATHER_KEY}`),
-      fetch(`${QWEATHER_BASE}/weather/24h?location=${coord}&key=${QWEATHER_KEY}`)
-    ]);
+  // 获取实时天气
+  getCurrentWeatherByJSONP(coord, key);
+  // 获取3天预报
+  getForecastByJSONP(coord, key);
+  // 获取24小时预报
+  getHourlyForecastByJSONP(coord, key);
+}
 
-    const nowData = await nowRes.json();
-    const dailyData = await dailyRes.json();
-    const hourlyData = await hourlyRes.json();
-
-    if (nowData.code !== '200' || dailyData.code !== '200' || hourlyData.code !== '200') {
-      showError('天气服务返回错误');
-      return;
+// JSONP方式获取实时天气
+function getCurrentWeatherByJSONP(coord, key) {
+  const script = document.createElement('script');
+  const callbackName = 'weatherCallback_' + Date.now();
+  
+  window[callbackName] = function(data) {
+    if (data && data.code === '200') {
+      setCache(cache.now, key, data.now);
+      displayCurrentWeather(data.now, currentCityName);
+    } else {
+      console.error('实时天气API错误:', data);
     }
+    document.head.removeChild(script);
+    delete window[callbackName];
+  };
+  
+  script.src = `${QWEATHER_BASE}/weather/now?location=${coord}&key=${QWEATHER_KEY}&callback=${callbackName}`;
+  document.head.appendChild(script);
+  
+  setTimeout(() => {
+    if (window[callbackName]) {
+      console.error('实时天气请求超时');
+      document.head.removeChild(script);
+      delete window[callbackName];
+    }
+  }, 10000);
+}
 
-    const now = nowData.now || {};
-    const dailyList = dailyData.daily || [];
-    const hourlyList = hourlyData.hourly || [];
+// JSONP方式获取3天预报
+function getForecastByJSONP(coord, key) {
+  const script = document.createElement('script');
+  const callbackName = 'forecastCallback_' + Date.now();
+  
+  window[callbackName] = function(data) {
+    if (data && data.code === '200') {
+      setCache(cache.forecast, key, data.daily);
+      displayForecast(data.daily);
+    } else {
+      console.error('3天预报API错误:', data);
+      showError('获取天气预报失败');
+    }
+    document.head.removeChild(script);
+    delete window[callbackName];
+  };
+  
+  script.src = `${QWEATHER_BASE}/weather/3d?location=${coord}&key=${QWEATHER_KEY}&callback=${callbackName}`;
+  document.head.appendChild(script);
+  
+  setTimeout(() => {
+    if (window[callbackName]) {
+      console.error('3天预报请求超时');
+      document.head.removeChild(script);
+      delete window[callbackName];
+    }
+  }, 10000);
+}
 
-    setCache(cache.now, key, now);
-    setCache(cache.forecast, key, dailyList);
-    setCache(cache.hourly, key, hourlyList);
-
-    displayCurrentWeather(now, currentCityName);
-    displayForecast(dailyList);
-    displayHourlyForecast(hourlyList);
-  } catch (e) {
-    showError('天气服务请求失败');
-  }
+// JSONP方式获取24小时预报
+function getHourlyForecastByJSONP(coord, key) {
+  const script = document.createElement('script');
+  const callbackName = 'hourlyCallback_' + Date.now();
+  
+  window[callbackName] = function(data) {
+    if (data && data.code === '200') {
+      setCache(cache.hourly, key, data.hourly);
+      displayHourlyForecast(data.hourly);
+    } else {
+      console.error('24小时预报API错误:', data);
+    }
+    document.head.removeChild(script);
+    delete window[callbackName];
+  };
+  
+  script.src = `${QWEATHER_BASE}/weather/24h?location=${coord}&key=${QWEATHER_KEY}&callback=${callbackName}`;
+  document.head.appendChild(script);
+  
+  setTimeout(() => {
+    if (window[callbackName]) {
+      console.error('24小时预报请求超时');
+      document.head.removeChild(script);
+      delete window[callbackName];
+    }
+  }, 10000);
 }
 
 // 渲染
