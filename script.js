@@ -45,8 +45,7 @@ function initMap() {
   map.on('click', function(e) {
     const lat = e.latlng.lat;
     const lng = e.latlng.lng;
-    updateMarker(lat, lng);
-    reverseGeocode(lat, lng);
+    updateLocationAndWeather(lat, lng);
   });
 }
 
@@ -56,37 +55,46 @@ function updateMarker(lat, lng) {
   currentPosition = { lat, lng };
 }
 
-// 逆地理编码（坐标 -> 城市名）
-async function reverseGeocode(lat, lng) {
+// 更新位置和天气（同步操作）
+async function updateLocationAndWeather(lat, lng) {
+  // 先更新地图标记
+  updateMarker(lat, lng);
+  
+  // 显示加载状态
+  showLoading();
+  
   try {
+    // 获取地址信息
     const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}`;
     const res = await fetch(url, { headers: { 'Accept-Language': 'zh-CN' } });
     const data = await res.json();
     const addr = data.address || {};
     const city = addr.city || addr.town || addr.village || addr.county || addr.state || '未知位置';
+    
+    // 更新界面显示
     currentCityName = city;
     document.getElementById('mapLocation').textContent = data.display_name || `${lat}, ${lng}`;
     document.getElementById('cityInput').value = city;
+    
     // 获取该位置的天气
-    getWeatherByPosition(lat, lng, city);
+    await getWeatherByPosition(lat, lng, city);
   } catch (e) {
     document.getElementById('mapLocation').textContent = '无法解析当前位置';
+    // 即使地址解析失败，也要获取天气
+    await getWeatherByPosition(lat, lng, '未知位置');
   }
 }
 
-// 正地理编码（城市名 -> 坐标）
+// 正地理编码（城市名 -> 坐标）并同步更新
 async function forwardGeocode(city) {
   const cached = getFromCache(cache.geocode, city, 12 * 60 * 60 * 1000);
   if (cached) {
     const { lat, lon, display_name } = cached;
     const latNum = parseFloat(lat), lonNum = parseFloat(lon);
-    map.setView([latNum, lonNum], 12);
-    updateMarker(latNum, lonNum);
-    currentCityName = city;
-    document.getElementById('mapLocation').textContent = display_name;
-    getWeatherByPosition(latNum, lonNum, city);
+    await updateLocationAndWeather(latNum, lonNum);
     return;
   }
+  
   try {
     const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(city)}`;
     const res = await fetch(url, { headers: { 'Accept-Language': 'zh-CN' } });
@@ -95,13 +103,11 @@ async function forwardGeocode(city) {
       const first = data[0];
       setCache(cache.geocode, city, first);
       const latNum = parseFloat(first.lat), lonNum = parseFloat(first.lon);
-      map.setView([latNum, lonNum], 12);
-      updateMarker(latNum, lonNum);
-      currentCityName = city;
-      document.getElementById('mapLocation').textContent = first.display_name;
-      getWeatherByPosition(latNum, lonNum, city);
+      await updateLocationAndWeather(latNum, lonNum);
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) { 
+    showError('无法找到该城市');
+  }
 }
 const forwardGeocodeDebounced = debounce(forwardGeocode, 800);
 
@@ -111,11 +117,9 @@ function getCurrentLocation() {
   if (navigator.geolocation) {
     const options = { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 };
     navigator.geolocation.getCurrentPosition(
-      pos => {
+      async pos => {
         const lat = pos.coords.latitude, lng = pos.coords.longitude;
-        map.setView([lat, lng], 12);
-        updateMarker(lat, lng);
-        reverseGeocode(lat, lng);
+        await updateLocationAndWeather(lat, lng);
         document.getElementById('mapLocation').textContent = '定位成功！';
       },
       err => {
@@ -125,12 +129,12 @@ function getCurrentLocation() {
         else if (err.code === err.TIMEOUT) msg = '定位超时';
         document.getElementById('mapLocation').textContent = msg;
         // 定位失败时获取默认城市天气
-        getWeatherByPosition(39.9042, 116.4074, '北京');
+        updateLocationAndWeather(39.9042, 116.4074);
       }, options
     );
   } else {
     document.getElementById('mapLocation').textContent = '浏览器不支持地理定位';
-    getWeatherByPosition(39.9042, 116.4074, '北京');
+    updateLocationAndWeather(39.9042, 116.4074);
   }
 }
 
